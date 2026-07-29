@@ -72,7 +72,7 @@ pwmu_dashboard/
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/<your-username>/pwmu_dashboard.git
+git clone https://github.com/saveyagroup-cell/PWMU-System.git
 cd pwmu_dashboard
 
 # 2. Create and activate a virtual environment
