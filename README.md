@@ -195,15 +195,16 @@ This app is a long-running Flask server with background camera/inference threads
 
 ---
 
-## Team Members
+## 👥 Team Members
 
-| Name | Role |
-|---|---|
-| _Add your name_ | _e.g. Team Lead / ML Engineer_ |
-| _Add teammate name_ | _e.g. Frontend / Backend_ |
-| _Add teammate name_ | _e.g. Computer Vision_ |
-
-*(Update this table with your actual team roster before submission.)*
+| Team Member       | Role      | Responsibility                   |
+| ----------------- | --------- | -------------------------------- |
+| **Nomend Kumar Sahu** | Team Lead | Project Management & Development |
+| **Yogesh Kumar Yadav** | Developer | Backend & Supabase Integration   |
+| **Harsha Sahu** | Developer | Frontend & UI/UX                 |
+| **Dagendra Kumar Sahu** | Developer | Maps & Route Optimization        |
+| **Jayant Verma** | Developer | Maps & Route Optimization        |
+s table with your actual team roster before submission.)*
 
 ---
 
