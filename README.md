@@ -204,7 +204,6 @@ This app is a long-running Flask server with background camera/inference threads
 | **Harsha Sahu** | Developer | Frontend & UI/UX                 |
 | **Dagendra Kumar Sahu** | Developer | Maps & Route Optimization        |
 | **Jayant Verma** | Developer | Maps & Route Optimization        |
-s table with your actual team roster before submission.)*
 
 ---
 
