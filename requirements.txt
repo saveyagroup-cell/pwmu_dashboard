@@ -1,0 +1,24 @@
+flask==3.0.3
+ultralytics==8.2.103
+opencv-python==4.10.0.84
+easyocr==1.7.2
+numpy==1.26.4
+requests==2.32.3
+python-dotenv==1.0.1
+supabase==2.7.4
+reportlab==4.2.5
+matplotlib==3.9.2
+
+# ---------------------------------------------------------------------------
+# GPU SPEED NOTE (waste segregation / ANPR feeling slow on the website?):
+# `pip install -r requirements.txt` pulls in a CPU-only torch by default on
+# many systems. If you have an NVIDIA GPU, install CUDA torch INSTEAD after
+# the above (this is almost always what makes the live stream feel slow in
+# the browser vs. fast in a plain VS Code script):
+#
+#   pip uninstall torch torchvision -y
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+#
+# Then just restart the app — config.py auto-detects the GPU and every
+# module (waste, plate, vehicle, thief) will use it automatically.
+# ---------------------------------------------------------------------------

@@ -1,239 +1,188 @@
-# PWMU Unified AI Control-Room Dashboard
+## 0. What's new (latest update)
 
-**Team EchoByte** · AI-powered monitoring dashboard for Plastic Waste Management Units (PWMUs) in rural Chhattisgarh
+### Authentication (Supabase Auth)
+Every page now requires sign-in. `/login` and `/signup` are the only public pages.
+- Sign Up collects Name, PWM Unit, District, Email, Password → creates a Supabase Auth user + a row in the new `profiles` table.
+- Sign In uses Supabase Auth (email/password). Session is a signed Flask cookie (`FLASK_SECRET_KEY`) — Supabase credentials never reach the browser.
+- Profile dropdown (top-right) shows Name / PWM Unit / District + Sign Out.
 
-![Python](https://img.shields.io/badge/Python-3.11-blue)
-![Flask](https://img.shields.io/badge/Flask-3.0-black)
-![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-purple)
-![Supabase](https://img.shields.io/badge/Backend-Supabase-3ECF8E)
-![License](https://img.shields.io/badge/status-active--development-yellow)
+### New navbar: Home / Gate & Security / AI Segregation / Dashboard
+- **Home** (`/`) — overview cards only (icon + title + status chip). No subtitles, no "Open Module" text, no Project Highlights/USP section — all removed per spec.
+- **Gate & Security** (`/gate-security`) — Vehicle Counter + ANPR + PWMU Shed Security, stacked on one page.
+- **AI Segregation** (`/ai-segregation`) — Primary Segregation + Secondary Plastic Classification, stacked on one page.
+- **Dashboard** (`/dashboard`) — the Analytics & Audit Report hub (4 charts + full PDF export), with proper "No records available" empty states instead of fake data.
+
+The old per-module pages (`/module/...`), the 5-tab view (`/tabs`), and the original dark-theme pages (`/classic`) all still work as alternate deep-links.
+
+### Real institutional logos
+The NIT Raipur / Government of Chhattisgarh / UNICEF logos you provided are now actual image files in `static/images/` and used as `<img>` tags in the header (not text placeholders anymore).
+
+### ANPR accuracy upgrade
+`modules/plate.py` now uses **multi-frame, track-based OCR confirmation** (adapted from your high-accuracy standalone ANPR script):
+- Each physical plate is tracked across frames (IOU matching) instead of reading a fresh crop every frame in isolation.
+- A plate number is only "confirmed" once several independent frames agree (either 3 consecutive exact matches, or character-level weighted voting over more frames) — this stops one-off OCR mistakes (like 0/O) from being saved as fact.
+- Shape filtering (aspect ratio + min area) rejects false positives like headlights/stickers.
+- HSRP hologram noise ("IND" prefix/suffix) is cleaned up.
+- Fuzzy duplicate detection (Levenshtein) stops the same plate being logged twice.
+- **Not included:** the standalone script's own CSV/crops-folder system (`detected_plates.csv`, `unconfirmed_plates.csv`, separate folders) — this app already has its own CSV + Supabase save flow, so that part was intentionally left out to avoid two competing logging systems.
 
 ---
 
-## Project Overview
+### Performance fix (video lag)
+The old architecture ran camera-read + YOLO inference + JPEG-encode all inside the HTTP response loop — so the browser stream was only as fast as the slowest step, every single frame. Now:
+- Each active module runs its own **background capture+inference thread**, fully decoupled from Flask's HTTP thread.
+- A `queue.Queue(maxsize=1)` always holds only the **latest** frame — older, laggy frames are dropped, not queued up.
+- Heavy inference (YOLO, and especially EasyOCR for plates) runs only every **Nth frame** (`config.FRAME_SKIP`, `config.PLATE_FRAME_SKIP`) — skipped frames reuse the last annotated overlay instead of re-running the model, so the stream stays smooth.
+- JPEG quality is tunable via `config.JPEG_QUALITY` (default 75) for a further speed/quality trade-off.
 
-PWMU Control-Room is a Flask-based computer-vision dashboard that turns a single camera feed (live webcam or uploaded video) into real-time operational data for a Plastic Waste Management Unit. It runs four independent AI modules and streams the annotated video plus live counters to a browser dashboard, while writing every event to Supabase for history, reporting, and audit.
+### Vehicle Counter and ANPR are now fully separate modules
+Previously combined into one "Gate" feed — now each has its own dedicated camera, page, and log, matching two independent camera setups (e.g. a wide gate camera for counting + a close-up camera for plates).
 
-**Core modules:**
+### New Executive Command Hub (home page `/`)
+Card-based landing page — click a card to open that module's dedicated full page:
+1. Vehicle Entry/Exit Counter
+2. ANPR — Number Plate Records (with Search Plate + Manual Entry Override)
+3. Primary Waste Segregation (Metal vs Other)
+4. Secondary Plastic Classification (7 RIC types)
+5. PWMU Shed Security (with browser audio alarm)
+6. Analytics & Audit Report Hub — 4 charts (hourly intake/outflow, revenue by plastic type, composition doughnut, peak traffic hours) + full PDF export
 
-| Module | What it does | Model |
+The old 5-tab single-page view is still available at **`/tabs`**, and the original dark-theme pages at **`/classic`**.
+
+### Mandatory institutional header + multi-language
+Every page now shows a top strip with **NIT Raipur | Government of Chhattisgarh | UNICEF**, plus a language switcher (English / Hindi / Chhattisgarhi) covering the header and hub page text (`static/js/i18n.js`). To extend translations to more of the UI, add `data-i18n="your.key"` to any element and a matching entry in all three language blocks in `i18n.js`.
+
+**Institutional logos:** the three circular badges (NR / CG / UN) in the header are text placeholders — official logo image files couldn't be generated or fetched here. Replace them in `templates/_header.html` with real `<img>` tags once you have the actual logo files from each institution.
+
+### Supabase image uploads — hardened
+If plate/theft images weren't showing up in Supabase, the most common causes are now handled:
+- Startup now prints whether the storage bucket is actually reachable (check your terminal on boot).
+- `supabase_schema.sql` now includes the **Storage RLS policies** needed for uploads to actually succeed (a "public" bucket only allows public *reads* by default — inserts still need an explicit policy, or the `service_role` key). Re-run the storage policy section of `supabase_schema.sql` if you haven't already.
+- Recommended: use the **service_role** key (Project Settings → API) in `.env`, not `anon` — it bypasses Storage RLS entirely and is safe here since it's only used server-side in Flask, never sent to the browser.
+
+---
+
+
+
+| Module | Kya karta hai | Model |
 |---|---|---|
-| Gate & Security (Vehicle Counter + ANPR) | Line-crossing IN/OUT vehicle counting + number-plate detection and OCR | `yolov8s.pt` + `number_plate.pt` |
-| Primary Segregation | Metal vs. Other waste classification (Conveyor 1) | `waste_primary.pt` |
-| Secondary Plastic Classification | Plastic RIC-type detection — PET / HDPE / PVC / LDPE / PP / PS / OTHERS (Conveyor 2) | `final_7types.pt` |
-| PWMU Shed Security | Zone-based loitering & unattended-object detection, with Telegram + Supabase alerts | `yolov8s.pt` |
+| **Gate 1 (ANPR + Vehicle Count)** | Combined: line-crossing IN/OUT counter + plate detection/OCR on one feed | `yolov8s.pt` (auto-download) + `number_plate.pt` |
+| **Conveyor 1 (Primary Segregation)** | Metal vs Other waste classification | `waste_primary.pt` (optional, new) |
+| **Conveyor 2 (Secondary Plastic Classification)** | Plastic material + RIC type detect karta hai | `final_7types.pt` |
+| **PWMU Shed (Thief/Loitering Detection)** | Zone-based loitering + unattended-object alert, Telegram + Supabase | `yolov8s.pt` (auto-download) |
 
-**Key features**
-- Live MJPEG camera streaming, or drag-and-drop video upload, per module
-- Supabase Auth login/signup (email + password) with operator profile (name, PWM unit, district)
-- Real-time KPI cards, audit log, and hourly charts on the Command Center
-- CSV and PDF report export (daily / weekly / monthly / all-time)
-- Estimated plastic resale revenue based on detected item counts
-- Multi-language UI (English / Hindi / Chhattisgarhi)
-- Institutional branding: NIT Raipur · Government of Chhattisgarh · UNICEF
-
-**Tech stack:** Python, Flask, OpenCV, Ultralytics YOLOv8, EasyOCR, Supabase (Postgres + Auth + Storage), ReportLab, Matplotlib.
+Har module: **camera ON/OFF toggle**, live webcam ya **video upload** dono support karta hai.
 
 ---
 
-## Repository Structure
+## 1. Apni `.pt` files kahan daalein
+
+Project ke `models/` folder me — **exactly yeh naam** rakhna zaroori hai (ya `config.py` me path change kar dena):
 
 ```
 pwmu_dashboard/
-├── app.py                    # Flask app entrypoint — routes, camera threads, API
-├── config.py                 # Model paths, thresholds, Supabase/Telegram settings
-├── modules/                  # One file per detection module (waste, vehicle, plate, thief, gate)
-│   ├── auth.py                # Supabase Auth (sign up / sign in / profile)
-│   ├── supabase_client.py      # Storage upload + table insert/read helper
-│   ├── reports.py / pdf_report.py
-│   └── ...
-├── models/                   # YOLO .pt weight files (see Installation Guide)
-├── templates/                 # Jinja2 HTML pages
-├── static/                    # css / js / images
-├── captures/                  # Local CSV logs + fallback image saves
-├── outputs/                   # Recorded annotated session videos
-├── supabase_schema.sql        # DB tables + storage buckets + RLS policies
-├── requirements.txt
-├── .env.example
-└── README.md
+└── models/
+    ├── final_7types.pt          <- tumhara plastic 7-type model (detect_train.py wala)
+    ├── waste_type_model.pt      <- OPTIONAL: dusra waste model agar hai (na ho to skip, app apne aap ek model se chalega)
+    └── number_plate.pt          <- tumhara number plate model (number_plate2.py wala)
 ```
+
+`yolov8s.pt` (vehicle count + thief detection ke liye) khud download nahi karna — Ultralytics pehli baar chalne par apne aap download kar lega. Agar offline chalana hai to isse bhi `models/` me daal ke `config.py` me path update kar dena.
 
 ---
 
-## Installation Guide
-
-### Prerequisites
-- Python 3.10 or 3.11
-- pip
-- A webcam (for live mode) — optional, video upload works without one
-- A free [Supabase](https://supabase.com) project (for auth, history, and image storage)
-
-### Steps
+## 2. Install & Setup
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/saveyagroup-cell/pwmu_dashboard.git
 cd pwmu_dashboard
-
-# 2. Create and activate a virtual environment
 python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 
-# 3. Install dependencies
 pip install -r requirements.txt
 ```
 
-**Model weights** — place your trained `.pt` files in `models/` using these exact names (or update the paths in `config.py`):
+`.env.example` ko copy karke `.env` banao aur values bharo:
 
-```
-models/
-├── final_7types.pt      # Secondary plastic RIC-type model
-├── waste_primary.pt     # Primary metal-vs-other model
-└── number_plate.pt      # Number-plate detector
+```bash
+cp .env.example .env
 ```
 
-`yolov8s.pt` (used for vehicle counting and loitering detection) does **not** need to be added manually — Ultralytics downloads it automatically on first run. For fully offline use, download it once and point `config.py` at the local file.
+Fill karo:
+- `SUPABASE_URL`, `SUPABASE_KEY` — Supabase project settings se
+- `SUPABASE_BUCKET` — default `pwmu-captures` rakh sakte ho
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — optional, thief alerts ke liye
 
-**Set up Supabase:**
-1. Open your Supabase project → **SQL Editor** → paste and run the full contents of `supabase_schema.sql`. This creates the `profiles`, `plate_detections`, `thief_alerts`, and `waste_sessions` tables, plus RLS policies.
-2. Confirm three **Storage buckets** exist (created automatically by the script, or add manually under Storage → New Bucket, each set to **Public: ON**):
-   - `pwmu-captures`
-   - `anpr-detections`
-   - `security-detections`
+> ⚠️ **Security note:** `boat5.py` me jo Telegram bot token/chat ID hardcoded tha, wo public/shared ho chuka hai maan ke chalo. BotFather me `/revoke` karke naya token banao aur sirf `.env` me daalo — code me kabhi hardcode mat karna.
 
-**Run locally:**
+---
+
+## 3. Supabase setup
+
+1. Supabase Dashboard → **SQL Editor** → `supabase_schema.sql` ka pura content paste karke run karo. Isse banega:
+   - `plate_detections` table
+   - `thief_alerts` table
+   - `waste_sessions` table (optional future use)
+   - `pwmu-captures` storage bucket (public)
+2. Agar bucket auto-create na ho paye, manually: **Storage → New Bucket → name `pwmu-captures` → Public: ON**
+
+App bina Supabase config ke bhi chalta hai (local-only mode) — bas cloud save/URL nahi milenge, sirf local `captures/` folder me images save hoti rahengi.
+
+---
+
+## 4. Run karo
 
 ```bash
 python app.py
 ```
 
-Open **http://localhost:5000** in your browser, sign up, and start any module from the Home page.
+Browser me kholo: **http://localhost:5000**
 
-> The app also runs without Supabase configured — auth, cloud image storage, and cross-restart history won't work, but local detection, live streaming, and CSV logging still do.
-
----
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and fill in your real values. **Never commit `.env` to GitHub** (already in `.gitignore`).
-
-```env
-# ---- Flask ----
-# A random, long secret string used to sign session cookies — change this in production.
-FLASK_SECRET_KEY=change-this-to-a-random-secret-string
-
-# ---- Supabase ----
-SUPABASE_URL=https://xxxxxxxx.supabase.co
-
-# Used for Auth (Sign Up / Sign In) — Project Settings > API > anon/public key
-SUPABASE_ANON_KEY=your-supabase-anon-key
-
-# Used for Storage/DB writes — service_role is recommended (bypasses Storage RLS).
-# Safe to use here because it is only ever read server-side by Flask, never sent to the browser.
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-
-SUPABASE_BUCKET=pwmu-captures
-SUPABASE_ANPR_BUCKET=anpr-detections
-SUPABASE_SECURITY_BUCKET=security-detections
-
-# ---- Telegram (optional — for thief/security alerts) ----
-# If you ever hardcoded a bot token during testing, revoke it immediately
-# (BotFather -> /revoke) and generate a new one before deploying.
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-
-# ---- Camera ----
-CAMERA_INDEX=0
-FRAME_SKIP=2
-PLATE_FRAME_SKIP=5
-JPEG_QUALITY=75
-```
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `FLASK_SECRET_KEY` | Yes | Signs the session cookie |
-| `SUPABASE_URL` | Yes (for cloud features) | Supabase project endpoint |
-| `SUPABASE_ANON_KEY` | Yes (for cloud features) | Auth sign-up / sign-in |
-| `SUPABASE_SERVICE_ROLE_KEY` | Recommended | Storage uploads + table writes (bypasses RLS) |
-| `SUPABASE_BUCKET` / `_ANPR_BUCKET` / `_SECURITY_BUCKET` | Yes (for cloud features) | Storage bucket names |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Optional | Sends a Telegram message on security alerts |
-| `CAMERA_INDEX` | No (default `0`) | Local webcam device index |
-| `FRAME_SKIP` / `PLATE_FRAME_SKIP` | No | Inference throttling for smoother live streams |
-| `JPEG_QUALITY` | No (default `75`) | Stream image quality vs. bandwidth trade-off |
+- **Overview** page se sabhi 4 modules dikhte hain
+- Har module page par **Start Camera** button se webcam chalu hoga (default index 0, `.env` me `CAMERA_INDEX` se change kar sakte ho)
+- **Process Video** se koi bhi video file upload karke usi model se process kar sakte ho
+- Waste + Vehicle modules me **Reset Counts** button bhi hai
 
 ---
 
-## Deployment Instructions
-
-This app is a long-running Flask server with background camera/inference threads and an MJPEG video stream, so it needs a host that keeps a persistent process alive — **Render is the better fit**; Vercel's serverless functions are not designed for continuous background threads or live video streaming, though it can still host the app for **uploaded-video processing** if you're set on using it. Either way, live *webcam* capture only works when a physical camera is attached to the machine running the app — on any cloud host, only the **video-upload** mode will function (there is no webcam on the server).
-
-### Option A — Render (recommended)
-
-1. Push your code to GitHub.
-2. On [Render](https://render.com), click **New → Web Service** and connect your repository.
-3. Configure:
-   - **Runtime:** Python 3
-   - **Build command:** `pip install -r requirements.txt`
-   - **Start command:** `gunicorn app:app --workers 1 --threads 4 --timeout 120`
-   *(add `gunicorn` to `requirements.txt` if it isn't already there; `app.run(debug=True)` in `app.py` is for local dev only)*
-4. Add all variables from `.env` under **Environment → Environment Variables**.
-5. Under **Disks**, optionally attach a persistent disk if you want `captures/`, `outputs/`, and `uploads/` to survive restarts (otherwise they reset on every redeploy — Supabase history is unaffected either way).
-6. Deploy. Render gives you a public URL (`https://your-app.onrender.com`).
-
-### Option B — Vercel (video-upload workflows only)
-
-1. Push your code to GitHub and import the repo into [Vercel](https://vercel.com).
-2. Add a `vercel.json` to route all traffic to your Flask app via Vercel's Python runtime:
-   ```json
-   {
-     "builds": [{ "src": "app.py", "use": "@vercel/python" }],
-     "routes": [{ "src": "/(.*)", "dest": "app.py" }]
-   }
-   ```
-3. Add all `.env` variables under **Project Settings → Environment Variables**.
-4. Be aware of Vercel's serverless limits: no persistent background threads, a hard execution timeout per request, and no writable local disk beyond `/tmp` — so live streaming (`/video_feed/*`), long processing jobs, and local CSV/log persistence will not behave the same as on Render.
-
----
-
-## 👥 Team Members
-
-| Team Member       | Role      | Responsibility                   |
-| ----------------- | --------- | -------------------------------- |
-| **Nomend Kumar Sahu** | Team Lead | Project Management & Development |
-| **Yogesh Kumar Yadav** | Developer | Backend & Supabase Integration   |
-| **Harsha Sahu** | Developer | Frontend & UI/UX                 |
-| **Dagendra Kumar Sahu** | Developer | Maps & Route Optimization        |
-| **Jayant Verma** | Developer | Maps & Route Optimization        |
-
----
-
-## System Screenshots
-
-> Add screenshots of the running dashboard here before submitting — e.g.:
+## 5. Folder structure
 
 ```
-docs/screenshots/
-├── home_hub.png
-├── gate_security.png
-├── ai_segregation.png
-└── dashboard_analytics.png
-```
-
-```markdown
-![Home Hub](docs/screenshots/home_hub.png)
-![Gate & Security](docs/screenshots/gate_security.png)
-![AI Segregation](docs/screenshots/ai_segregation.png)
-![Analytics Dashboard](docs/screenshots/dashboard_analytics.png)
+pwmu_dashboard/
+├── app.py                  # Flask app, routes, camera streaming
+├── config.py                # Saari settings ek jagah
+├── requirements.txt
+├── .env.example
+├── supabase_schema.sql
+├── modules/
+│   ├── waste.py             # Waste segregation processor (used by legacy /waste and Conveyor 2)
+│   ├── waste_primary.py     # NEW: Conveyor 1 — Metal vs Other (optional model)
+│   ├── gate.py              # NEW: Gate 1 — combines vehicle.py + plate.py on one feed
+│   ├── vehicle.py           # Vehicle IN/OUT counter
+│   ├── plate.py              # Number plate + OCR + Supabase save
+│   ├── thief.py               # Loitering/theft detection + alerts
+│   └── supabase_client.py    # Supabase upload/insert helper
+├── templates/                # HTML pages (dark control-room UI)
+├── static/css/style.css
+├── static/js/main.js
+├── models/                   # <-- apni .pt files yahan daalo
+├── uploads/                  # uploaded videos yahan save hote hain
+└── captures/                 # CSV logs + local image backups
 ```
 
 ---
 
-## Live Demo Link
+## 6. Config tuning (`config.py`)
 
-🔗 `https://your-app.onrender.com` — *(replace with your deployed Render/Vercel URL)*
+- `WASTE_CONF`, `VEHICLE_CONF`, `PLATE_CONF`, `THIEF_CONF` — confidence thresholds
+- `VEHICLE_LINE_Y_RATIO` — IN/OUT line ki height (0.6 = frame ke 60% par)
+- `TEST_MODE = True` — thief module jaldi trigger karega testing ke liye (5 sec). Real deployment ke liye `False` karo — tab sirf raat 10PM–6AM active hoga aur 5 min loitering par alert dega
+- `FRAME_SKIP` — har Nth frame par hi inference (default 2) — CPU load kam karne ke liye, GPU ho to 1 rakh sakte ho
 
 ---
 
-## License
+## 7. Aage kya add kar sakte ho
 
-Built for academic/hackathon submission by Team EchoByte, NIT Raipur.
+- Thief detection ka zone abhi frame ke center me fixed rectangle hai — agar chaho to canvas-drawing UI add karke user se 4-point polygon draw karwa sakte ho (jaisa `boat5.py` original me tha)
+- Vehicle module me multiple counting lines / multi-camera support
+- Role-based login (Admin/Operator) Supabase Auth se
+- Waste module me daily/weekly composition chart (jaisa PWMU dashboard mockup me hai) — `waste_sessions` table already schema me hai isi ke liye
